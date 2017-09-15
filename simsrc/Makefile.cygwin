@@ -1,0 +1,101 @@
+CC = gcc
+
+# Development
+#CFLAGS = -O3 -c -Wall -Wextra -fstack-protector-all -D_FORTIFY_SOURCE=2 -DCONFDIR=\"${CONF}\" -DDISKSDIR=\"${DISKS}\"
+
+# Production
+CFLAGS = -O3 -c -Wall -Wextra -U_FORTIFY_SOURCE -I/usr/include/SDL2
+
+LFLAGS = -lSDL2
+
+OBJ =   sim0.o \
+	sim1.o \
+	sim1a.o \
+	sim2.o \
+	sim3.o \
+	sim4.o \
+	sim5.o \
+	sim6.o \
+	sim7.o \
+	simctl.o \
+	simint.o \
+	memory.o \
+	il9341.o \
+	iosim.o \
+	simfun.o \
+	simglb.o \
+	unix_terminal.o \
+	lcd_emu.o \
+	config.o
+
+all: ../newspec
+	@echo
+	@echo "Done."
+	@echo
+
+../newspec : $(OBJ)
+	$(CC) $(OBJ) $(LFLAGS) -o ../newspec
+
+sim0.o : sim0.c sim.h simglb.h config.h memory.h lcd_emu.h
+	$(CC) $(CFLAGS) sim0.c
+
+sim1.o : sim1.c sim.h simglb.h config.h memory.h
+	$(CC) $(CFLAGS) sim1.c
+
+sim1a.o : sim1a.c sim.h simglb.h config.h memory.h
+	$(CC) $(CFLAGS) sim1a.c
+
+sim2.o : sim2.c sim.h simglb.h config.h memory.h
+	$(CC) $(CFLAGS) sim2.c
+
+sim3.o : sim3.c sim.h simglb.h config.h memory.h
+	$(CC) $(CFLAGS) sim3.c
+
+sim4.o : sim4.c sim.h simglb.h config.h memory.h
+	$(CC) $(CFLAGS) sim4.c
+
+sim5.o : sim5.c sim.h simglb.h config.h memory.h
+	$(CC) $(CFLAGS) sim5.c
+
+sim6.o : sim6.c sim.h simglb.h config.h memory.h
+	$(CC) $(CFLAGS) sim6.c
+
+sim7.o : sim7.c sim.h simglb.h config.h memory.h
+	$(CC) $(CFLAGS) sim7.c
+
+simctl.o : simctl.c sim.h simglb.h memory.h
+	$(CC) $(CFLAGS) simctl.c
+
+simint.o : simint.c sim.h simglb.h
+	$(CC) $(CFLAGS) simint.c
+
+memory.o : memory.c sim.h simglb.h memory.h 
+	$(CC) $(CFLAGS) memory.c
+
+il9341.o : il9341.c sim.h
+	$(CC) $(CFLAGS) il9341.c
+
+iosim.o : iosim.c sim.h simglb.h memory.h
+	$(CC) $(CFLAGS) iosim.c
+
+simfun.o : simfun.c sim.h
+	$(CC) $(CFLAGS) simfun.c
+
+simglb.o : simglb.c sim.h
+	$(CC) $(CFLAGS) simglb.c
+
+unix_terminal.o : unix_terminal.c
+	$(CC) $(CFLAGS) unix_terminal.c
+
+lcd_emu.o : lcd_emu.c
+	$(CC) $(CFLAGS) lcd_emu.c
+
+config.o : config.c
+	$(CC) $(CFLAGS) config.c
+
+clean:
+	rm -f *.o
+
+allclean:
+	make -f Makefile.cygwin clean
+	rm -f ../newspec.exe
