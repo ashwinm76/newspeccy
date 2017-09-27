@@ -25,24 +25,24 @@ WORD colour_table[] =
         // Spectrum colours are:         n GRB
 	
 	// Normal colours
-	0               ,// COLOUR_BLACK  = 0 000
-	BM0             ,// COLOUR_BLUE   = 1 001
-	RM0             ,// COLOUR_RED    = 2 010
-	RM0 | BM0       ,// COLOUR_PURPLE = 3 011
-	GM0             ,// COLOUR_GREEN  = 4 100
-	GM0 | BM0       ,// COLOUR_CYAN   = 5 101
-	GM0 | RM0       ,// COLOUR_YELLOW = 6 110
-	GM0 | RM0 | BM0 ,// COLOUR_WHITE  = 7 111
+	0               ,// COLOUR_BLACK  = 0 000 - 0000
+	BM0             ,// COLOUR_BLUE   = 1 001 - 0017
+	RM0             ,// COLOUR_RED    = 2 010 - B800
+	RM0 | BM0       ,// COLOUR_PURPLE = 3 011 - B817
+	GM0             ,// COLOUR_GREEN  = 4 100 - 05E0
+	GM0 | BM0       ,// COLOUR_CYAN   = 5 101 - 05F7
+	GM0 | RM0       ,// COLOUR_YELLOW = 6 110 - BDE0
+	GM0 | RM0 | BM0 ,// COLOUR_WHITE  = 7 111 - BDF7
 
 	// Bright colours
-	0            ,// COLOUR_BLACK  = 0 000
-	BM           ,// COLOUR_BLUE   = 1 001
-	RM           ,// COLOUR_RED    = 2 010
-	RM | BM      ,// COLOUR_PURPLE = 3 011
-	GM           ,// COLOUR_GREEN  = 4 100
-	GM | BM      ,// COLOUR_CYAN   = 5 101
-	GM | RM      ,// COLOUR_YELLOW = 6 110
-	GM | RM | BM ,// COLOUR_WHITE  = 7 111
+	0            ,// COLOUR_BLACK  = 0 000 - 0000
+	BM           ,// COLOUR_BLUE   = 1 001 - 001F
+	RM           ,// COLOUR_RED    = 2 010 - F800
+	RM | BM      ,// COLOUR_PURPLE = 3 011 - F81F
+	GM           ,// COLOUR_GREEN  = 4 100 - 07E0
+	GM | BM      ,// COLOUR_CYAN   = 5 101 - 07FF
+	GM | RM      ,// COLOUR_YELLOW = 6 110 - FFE0
+	GM | RM | BM ,// COLOUR_WHITE  = 7 111 - FFFF
 };
 
 void fbinit()
@@ -75,12 +75,17 @@ void fb_set_border(BYTE colour)
 #ifdef LOG_LCD_MEM
 	fprintf(mem_log_file, "BORDER WR, PC = 0x%04x\r\n", PC);
 #endif
+	return;
 	colour &= 0x7;
 	
-	fill(0, 319, 0, LCD_WIN_Y_START-1, colour_table[colour]);
-	fill(0, LCD_WIN_X_START-1, 0, 239, colour_table[colour]);
-	fill(LCD_WIN_X_END+1, 319, 0, 239, colour_table[colour]);
-	fill(0, 319, LCD_WIN_Y_END+1, 239, colour_table[colour]);
+	// Top
+	fill(0, 319, 0, 23, colour_table[colour]);
+	// Left
+	fill(0, 31, 24, 215, colour_table[colour]);
+	// Right
+	fill(288, 319, 24, 215, colour_table[colour]);
+	// Bottom
+	fill(0, 319, 216, 239, colour_table[colour]);
 }
 
 void fbwr(WORD addr, BYTE data)
@@ -96,6 +101,12 @@ void fbwr(WORD addr, BYTE data)
 	}
 #endif
 
+	// silence the warning
+	data = data;
+
+	// returning since this functionality is now in the ROM
+	return;
+#if 0
 	if (addr < 16384 || addr >= (16384 + 6144 + 768))
 	{
 	  return;
@@ -103,6 +114,7 @@ void fbwr(WORD addr, BYTE data)
 
 	if (addr >= (16384 + 6144))
 	{
+		//printf("ATTRIB\r\n");
 		// 768 attrs = 0x300
 		// attr addresses: 0x5800 - 0x5aff
 		// charx = addr & 0x1f
@@ -131,29 +143,31 @@ void fbwr(WORD addr, BYTE data)
 			ink_colour += 8;
 			paper_colour += 8;
 		}
-		//fprintf(mem_log_file, "fbaddr = %04x, third = %d, charx=%d, charline=%d, ink = %d, paper = %d\r\n", fb_addr, third, charx, charline, ink_colour, paper_colour);
 		for(int l=0; l<8; l++)
 		{
 			BYTE row = memory[fb_addr];
 			int x = LCD_WIN_X_START + charx*8;
-			il9341_set_window(x, LCD_WIN_X_END, y, LCD_WIN_Y_END);
-			il9341_wr_cmd(0x2c);
+			//il9341_set_window(x, LCD_WIN_X_END, y, LCD_WIN_Y_END);
+			//il9341_wr_cmd(0x2c);
 			for(int i=0; i<8; i++)
 			{
 				WORD pixel_colour = colour_table[(row & 0x80) ? ink_colour : paper_colour];
-				il9341_wr_data(pixel_colour >> 8);
-				il9341_wr_data(pixel_colour & 0xff);
-				//fputc((row & 0x80) ? '#' : '.', mem_log_file);
+				//il9341_wr_data(pixel_colour >> 8);
+				//il9341_wr_data(pixel_colour & 0xff);
 				row <<= 1;
 			}
-			//fputc('\r', mem_log_file);
-			//fputc('\n', mem_log_file);
 			fb_addr += 8*32;
 			y++;
 		}
+		//printf("ATTRIB DONE\r\n");
 		return;
 	}
 
+	// addr = 16384 - (16384+192*256/8)
+	//      = 16384 - 22528
+	//      = 0x4000 - 0x5800
+	// addr >> 5 = 512 - 704
+	//           = 0x200 - 0x2c0
 	// x = (addr%32) * 8
 	// line = (addr >> 5) - 0x200 -> 0 to 191 [0->0xbf]
 	// third = line >> 6
@@ -164,28 +178,30 @@ void fbwr(WORD addr, BYTE data)
 	//       = addr%32 = addr&0x1f
 	// chary = y/8
 
+	printf("FB\r\n");
+	// x = addr[LSB] << 3
 	int x = LCD_WIN_X_START + ((addr & 0x1f) << 3);
-	int line = (addr-16384)>>5;
+	//int line = (addr-16384)>>5;
+	int line = (addr >> 5) & 0xff;
 	int y = LCD_WIN_Y_START + (((line&0x3f)<<3)&0x3f) + ((line&0x3f)>>3) + (line&0xc0);
-	il9341_set_window(x, x+8, y, y+1);
-	il9341_wr_cmd(0x2c);
-	//fprintf(mem_log_file, "FB addr = %04x, charx=%d, charline=%d\r\n", addr, (x-LCD_WIN_X_START)/8, (y-LCD_WIN_Y_START)/8);
-	for(int i=0; i<8; i++)
+	//il9341_set_window(x, x+8, y, y+1);
+	//il9341_wr_cmd(0x2c);
+	//WORD attrib_index = 16384 + 6144 + (y >> 3) + (addr & 0x1f);
+	WORD attrib_index = 23695;
+	int ink_colour = memory[attrib_index] & 7;
+	int paper_colour = (memory[attrib_index] >> 3) & 7;
+	if (memory[attrib_index] & 0x40)
 	{
-		WORD attrib_index = 16384 + 6144 + (y >> 3) + (addr & 0x1f);
-		int ink_colour = memory[attrib_index] & 7;
-		int paper_colour = (memory[attrib_index] >> 3) & 7;
-		if (memory[attrib_index] & 0x40)
-		{
-			ink_colour += 8;
-			paper_colour += 8;
-		}
+		ink_colour += 8;
+		paper_colour += 8;
+	}
+	for(int i=0; i<8; i++)
+	{	
 		WORD pixel_colour = colour_table[(data & 0x80) ? ink_colour : paper_colour];
-		il9341_wr_data(pixel_colour >> 8);
-		il9341_wr_data(pixel_colour & 0xff);
-		//fputc((data & 0x80) ? '#' : '.', mem_log_file);
+		//il9341_wr_data(pixel_colour >> 8);
+		//il9341_wr_data(pixel_colour & 0xff);
 		data <<= 1;
 	}
-	//fputc('\r', mem_log_file);
-	//fputc('\n', mem_log_file);
+	printf("FB DONE\r\n");
+#endif
 }

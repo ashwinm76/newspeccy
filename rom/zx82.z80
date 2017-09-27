@@ -3518,8 +3518,8 @@ L0B93:  CP      C               ; this test is really for screen - new line ?
         CALL    Z,L0C55         ; routine PO-SCR considers scrolling
 
         POP     DE              ; restore source
-        PUSH    BC              ; save line/column
-        PUSH    HL              ; and destination
+        PUSH    HL              ; save destination
+        PUSH    BC              ; and line/column
         LD      A,($5C91)       ; fetch P_FLAG to accumulator
         LD      B,$FF           ; prepare OVER mask in B.
         RRA                     ; bit 0 set if OVER 1
@@ -3545,13 +3545,10 @@ L0BA4:  RRA                     ; skip bit 1 of P_FLAG
 L0BB6:  EX      DE,HL           ; now HL=source, DE=destination
 
 ;; PR-ALL-4
-L0BB7:  EX      AF,AF'          ; save printer/screen flag
-        LD      A,(DE)          ; fetch existing destination byte
-        AND     B               ; consider OVER
-        XOR     (HL)            ; now XOR with source
-        XOR     C               ; now with INVERSE MASK
-        LD      (DE),A          ; update screen/printer
-        EX      AF,AF'          ; restore flag
+L0BB7:  NOP
+        CALL    LCD_WRCH        ; prepare to write the character
+L0BBB:
+        CALL    LCD_WRCH8       ; write an 8-pixel row of the character
         JR      C,L0BD3         ; to PR-ALL-6 - printer address update
 
         INC     D               ; gives next pixel line down screen
@@ -3559,15 +3556,15 @@ L0BB7:  EX      AF,AF'          ; save printer/screen flag
 ;; PR-ALL-5
 L0BC1:  INC     HL              ; address next character byte
         DEC     A               ; the byte count is decremented
-        JR      NZ,L0BB7        ; back to PR-ALL-4 for all 8 bytes
+        JR      NZ,L0BBB        ; back to PR-ALL-4 for all 8 bytes
 
         EX      DE,HL           ; destination to HL
         DEC     H               ; bring back to last updated screen position
         BIT     1,(IY+$01)      ; test FLAGS  - is printer in use ?
         CALL    Z,L0BDB         ; if not, call routine PO-ATTR to update
                                 ; corresponding colour attribute.
-        POP     HL              ; restore original screen/printer position
-        POP     BC              ; and line column
+        POP     BC              ; restore original line column
+        POP     HL              ; and screen/printer position
         DEC     C               ; move column to right
         INC     HL              ; increase screen/printer position
         RET                     ; return and continue into PO-STORE
@@ -4258,7 +4255,7 @@ L0E19:  EX      DE,HL           ; save source in DE.
 
 ;; CL-LINE
 L0E44:  PUSH    BC              ; save line count
-        CALL    L0E9B           ; routine CL-ADDR gets top address
+        CALL    LCD_CL_LINES    ; clear the relevant display portion
         LD      C,$08           ; there are eight screen lines to a text line.
 
 ;; CL-LINE-1
@@ -5413,22 +5410,14 @@ L11B7:  DI                      ; Disable Interrupts - machine stack will be
 
 ;; START-NEW
 L11CB:  LD      B,A             ; Save the flag to control later branching.
-
-        LD      A,$07           ; Select a white border
-        OUT     ($FE),A         ; and set it now by writing to a port.
-
         LD      A,$3F           ; Load the accumulator with last page in ROM.
         LD      I,A             ; Set the I register - this remains constant
                                 ; and can't be in the range $40 - $7F as 'snow'
                                 ; appears on the screen.
 
         NOP                     ; These seem unnecessary.
-        NOP                     ;
-        NOP                     ;
-        NOP                     ;
-        NOP                     ;
-        NOP                     ;
-
+        NOP
+        
 ; -----------------------
 ; THE 'RAM CHECK' SECTION
 ; -----------------------
@@ -5515,6 +5504,9 @@ L121C:
 
         DEC     HL              ; followed by empty byte (not important).
         LD      SP,HL           ; set up the machine stack pointer.
+        CALL    LCD_INIT        ; Initialise the LCD controller
+        LD      A,$07           ; Select a white border
+        CALL    LCD_BORDER      ; and set it via the LCD controller
         DEC     HL              ;
         DEC     HL              ;
         LD      ($5C3D),HL      ; ERR_SP is where the error pointer is
@@ -10660,16 +10652,16 @@ L2294:  CALL    L1E94           ; routine FIND-INT1
         JR      NC,L2244        ; back to REPORT-K if not
                                 ; 'Invalid colour'.
 
-        OUT     ($FE),A         ; outputting to port effects an immediate
-                                ; change.
-        RLCA                    ; shift the colour to
-        RLCA                    ; the paper bits setting the
-        RLCA                    ; ink colour black.
-        BIT     5,A             ; is the number light coloured ?
-                                ; i.e. in the range green to white.
-        JR      NZ,L22A6        ; skip to BORDER-1 if so
+        CALL    LCD_BORDER
 
-        XOR     $07             ; make the ink white.
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
 
 ;; BORDER-1
 L22A6:  LD      ($5C48),A       ; update BORDCR with new paper/ink
@@ -19094,156 +19086,610 @@ L386C:  DEFB    $38             ;;end-calc              last value is 1 or 0.
 ; THE 'SPARE' LOCATIONS
 ; ---------------------
 
+GFXLCD_ROTATION = 1
+
+#if GFXLCD_ROTATION = 0
+        ; MY | BGR
+        #define MADCTL $88
+        #define MAX_W 240
+        #define MAX_H 320
+#endif
+
+#if GFXLCD_ROTATION = 1
+        ; MX | MY | MV | BGR
+        #define MADCTL $e8
+        #define MAX_W 320
+        #define MAX_H 240
+#endif
+
+#if GFXLCD_ROTATION = 2
+        ; MX | BGR
+        #define MADCTL $48
+        #define MAX_W 240
+        #define MAX_H 320
+#endif
+
+#if GFXLCD_ROTATION = 3
+        ; MV | BGR
+        #define MADCTL $28
+        #define MAX_W 320
+        #define MAX_H 240
+#endif
+
+GFXLCD_CMD_PORT = 1
+GFXLCD_DATA_PORT = 5
+
+; LCD controller initialization for the IL9341 LCD controller
+LCD_INIT: 
+        ; 0x01 Soft reset
+        LD      A,$1
+        OUT     (GFXLCD_CMD_PORT),A
+        
+        ; delay(50);
+        LD      A,$17
+        CALL    LCD_DELAY
+
+LCD_INIT_1:
+        ; 0x28 Display off
+        LD      A,$28
+        OUT     (GFXLCD_CMD_PORT),A
+
+        ; 0xc0 Power Control 1
+        ; VRH = 0x23 (GVDD = 4.6V)
+        LD      A,$C0
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,$23
+        OUT     (GFXLCD_DATA_PORT),A
+
+        ; 0xc1 Power Control 2
+        ; BT = 0 (AVDD = VCI*2, VGH = VCI*7, VGL = -VCI*4)
+        LD      A,$C1
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,$10
+        OUT     (GFXLCD_DATA_PORT),A
+
+        ; 0xc5 VCOM Control 1
+        ; VMH = 0x2b (VCOMH = 3.775V)
+        ; VML = 0x2b (VCOML = -1.425V)
+        LD      A,$C5
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,$2B
+        OUT     (GFXLCD_DATA_PORT),A
+        OUT     (GFXLCD_DATA_PORT),A
+
+        ; 0xc7 VCOM Control 2
+        ; nVM = 1
+        ; VMF = 0x40 (VCOMH = VMH, VCOML = VML)
+        LD      A,$C7
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,$C0
+        OUT     (GFXLCD_DATA_PORT),A
+
+        ; 0x36 Memory Access Control
+        ; MY = 1
+        ; MX = 0
+        ; MV = 0
+        ; ML = 0
+        ; BGR = 1
+        ; MH = 0
+        LD      A,$36
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,$88
+        OUT     (GFXLCD_DATA_PORT),A
+
+        ; 0x3a COLMODE Pixel Format Set
+        ; DPI = 101b (16 bpp for RGB i/f)
+        ; DBI = 101b (16 bpp for MCU i/f)
+        LD      A,$3A
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,$55
+        OUT     (GFXLCD_DATA_PORT),A
+
+        ; 0xb1 Frame Rate Control
+        ; DIVA = 00 (Division ratio 1)
+        ; RTNA = 0x1b (70Hx frame rate)
+        LD      A,$B1
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,$00
+        OUT     (GFXLCD_DATA_PORT),A
+        LD      A,$1B
+        OUT     (GFXLCD_DATA_PORT),A
+
+        ; 0xb7 Entry Mode Set
+        ; DSTB = 0 (No deep standby)
+        ; GON = 1 -|
+        ; DTE = 1 -|- Normal display
+        ; GAS = 1 (Low voltage detection disable)
+        LD      A,$B7
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,$07
+        OUT     (GFXLCD_DATA_PORT),A
+
+        ; 0x11 Sleep Out (disable sleep mode)
+        LD      A,$11
+        OUT     (GFXLCD_CMD_PORT),A
+
+        ;delay(150);
+        LD      A,$45
+        CALL    LCD_DELAY
+LCD_INIT_2:        
+
+        ; 0x29 Display On
+        LD      A,$29
+        OUT     (GFXLCD_CMD_PORT),A
+
+        ;delay(500);
+        LD      A,$E6
+        CALL    LCD_DELAY
+LCD_INIT_3:        
+
+        ; set rotation
+        LD      A,$36
+        OUT     (GFXLCD_CMD_PORT),A
+        LD      A,MADCTL
+        OUT     (GFXLCD_DATA_PORT),A
+
+        RET
+
+; Set the border colour
+; Entry:
+;       A = border colour (must be 0..7)
+; Exit:
+;       A = ink and paper colours usable for the lower part of the screen.
+;           This can be stored in BORDCR.
+LCD_BORDER:
+        PUSH    AF                      ; Save AF
+        PUSH    BC                      ; and BC
+        PUSH    DE                      ; and DE
+        PUSH    HL                      ; and HL
+        
+        LD      HL,LCD_COLOUR_TABLE     ; Load HL with the colour look-up table
+        RLCA                            ; Colour table offset = 2 * colour number
+        LD      D,$00                   ; Load DE with the colour table
+        LD      E,A                     ; offset from A
+        ADD     HL,DE                   ; Get the colour table entry address in HL
+        LD      E,(HL)                  ; Load the lower byte of the colour in E
+        INC     HL
+        LD      D,(HL)                  ; Load the upper byte of the colour in D
+        EX      DE,HL                   ; Put the colour value into HL
+        SCF                             ; set carry so that the fill routine
+                                        ; sends the write RAM command before 
+                                        ; doing the fill
+
+        ; Fill the top border X[0..319], Y[0..23]
+        LD      BC,$0000                ; Window start X = 0
+        LD      DE,$013F                ; Window end X = 319
+        LD      A,$2A
+        CALL    LCD_WINDOW              ; Set the display window X extents
+        LD      DE,$0017                ; Window end Y = 23
+        LD      A,$2B
+        CALL    LCD_WINDOW              ; Set the display window Y extents
+        LD      DE,$1E00                ; Fill 7680 pixels with
+        CALL    LCD_FILL                ; the colour value in HL
+
+        ; Fill the bottom border X[0..319], Y[216..239]
+        LD      BC,$00D8                ; Window start Y = 216
+        LD      DE,$00EF                ; Window end Y = 239
+        CALL    LCD_WINDOW              ; Set the display window Y extents
+        LD      DE,$1E00                ; Fill 7680 pixels with
+        CALL    LCD_FILL                ; the colour value in HL
+
+        ; Fill the left border X[0..31], Y[24..215]
+        LD      BC,$0018                ; Window start Y = 24
+        LD      DE,$00D7                ; Window end Y = 215
+        CALL    LCD_WINDOW              ; Set the display window Y extents
+        LD      BC,$0000                ; Window start X = 0
+        LD      DE,$001F                ; Window end X = 31
+        LD      A,$2A
+        CALL    LCD_WINDOW              ; Set the display window X extents
+        LD      DE,$1800                ; Fill 6144 pixels with
+        CALL    LCD_FILL                ; the colour value in HL
+
+        ; Fill the right border X[288..319], Y[24..215]
+        LD      BC,$0120                ; Window start X = 288
+        LD      DE,$013F                ; Window end X = 319
+        CALL    LCD_WINDOW              ; Set the display window X extents
+        LD      DE,$1800                ; Fill 6144 pixels with
+        CALL    LCD_FILL                ; the colour value in HL
+
+        POP     HL                      ; Restore HL
+        POP     DE                      ; and DE
+        POP     BC                      ; and BC
+        POP     AF                      ; and AF
+
+        RLCA                            ; Shift the colour to
+        RLCA                            ; the paper bits setting the
+        RLCA                            ; ink colour black.
+        BIT     5,A                     ; Is the number light coloured ?
+                                        ; i.e. in the range green to white.
+        RET     NZ                      ; Return if so
+        XOR     $07                     ; Make the ink white.
+        RET                             ; Return
+
+; Fill a portion of the screen
+; Entry:
+;       The LCD display window must have been set
+;       DE = the number of pixels to fill (at least 1)
+;       HL = the RGB565 colour to fill
+;       CY = 1 => send the write RAM command before the fill
+; Exit:
+;       DE = 0
+LCD_FILL:
+        PUSH    AF                      ; Save AF; we will be using A
+        PUSH    BC                      ; Save BC; C will be used for OUTs
+        LD      C,GFXLCD_DATA_PORT      ; Put the data port address in C
+        JR      NC,LCD_FILL_1           ; if carry is set, then
+        LD      A,$2C                   ; Send the "write RAM" command
+        OUT     (GFXLCD_CMD_PORT),A     ; to the display controller
+LCD_FILL_1:        
+        OUT     (C),H                   ; Write the upper colour byte
+        OUT     (C),L                   ; write the lower colour byte
+        DEC     DE                      ; Decrement the pixel counter
+        LD      A,D                     ; OR D and E together in A
+        OR      E                       ; to determine if DE is 0 or not
+        JR      NZ,LCD_FILL_1           ; Repeat till the pixel counter is 0
+        POP     BC                      ; Restore BC
+        POP     AF                      ; Restore AF
+        RET                             ; Return
+
+; Set the X or Y extents of the LCD display window
+; Entry:
+;       A = $2A => X extents; A = $2B => Y extents
+;       BC = window X/Y start
+;       DE = window X/Y end
+LCD_WINDOW:
+        PUSH    AF                      ; Save AF
+                                        ; Send the "Column/Page address set" command
+        OUT     (GFXLCD_CMD_PORT),A     ; to the display controller
+        LD      A,B                     ; Send the upper byte of the window X start
+        OUT     (GFXLCD_DATA_PORT),A    ; to the display controller
+        LD      A,C                     ; Send the lower byte of the window X start
+        OUT     (GFXLCD_DATA_PORT),A    ; to the display controller
+        LD      A,D                     ; Send the upper byte of the window X end
+        OUT     (GFXLCD_DATA_PORT),A    ; to the display controller
+        LD      A,E                     ; Send the lower byte of the window X end
+        OUT     (GFXLCD_DATA_PORT),A    ; to the display controller
+        POP     AF                      ; Restore AF
+        RET                             ; and return
+
+; Prepare to write char pixels from (HL) to (DE)
+; Entry:
+;       TOS-1 = (row, col)
+LCD_WRCH:
+        EX      AF,AF'          ; save printer/screen flag
+        INC     SP
+        INC     SP
+        EX      (SP),HL         ; exchange the row/col from TOS with HL
+        DEC     SP
+        DEC     SP
+        PUSH    BC              ; save BC
+        PUSH    DE              ; and DE
+        PUSH    HL              ; save the original row/col on the stack
+
+        ; 23-24 -> 22-23 == (24-DF_SZ)-23
+        ; 22-23 -> 22-23
+        LD      A,$18           ; load A with 24
+        SUB     H               ; A = 24-row to get the row in the range
+                                ; 0..23 into A
+        BIT     0,(IY+$02)      ; test TV_FLAG  - lower screen in use ?
+        JR      Z,LCD_WRCH_1    ; skip to LCD_WRCH_1 if handling upper part
+        LD      A,H
+        
+LCD_WRCH_1:
+        AND     $1F             ; clear the top 3 bits of A, and also the carry
+        RLA                     ; in preparation for 3 left arithmetic shifts,
+        RLA                     ; i.e. a multiply by 8
+        RLA                     ; to get the y position (0..191) in A
+        ADD     A,$18           ; add 24 to get it within the display window (24..215)
+        LD      C,A             ; get the LSB of the sum into C
+        LD      B,$00           ; the MSB of the sum is always 0
+                                ; BC now contains the LCD window Y start        
+        LD      HL,$07          ; HL = BC+7, to get a pixel window that is
+        ADD     HL,BC           ; 8 pixels tall
+        LD      D,H
+        LD      E,L             ; store the window end Y in DE
+        LD      A,$2B
+        CALL    LCD_WINDOW      ; set the pixel window Y extents
+
+        POP     HL              ; get the saved row, col values into HL
+        PUSH    HL              ; and save them back again
+
+        LD      A,$21           ; load A with 33
+        SUB     L               ; A = 33-col to get the column in the range
+                                ; 0..31 into A
+        AND     $1F             ; clear the top 3 bits of A, and also the carry
+        RLA                     ; in preparation for 3 left arithmetic shifts,
+        RLA                     ; i.e. a multiply by 8,
+        RLA                     ; to get the x position (0..255) in A
+        ADD     A,$20           ; add 32 to get it within the display window (32..287)
+        LD      C,A             ; get the LSB of the sum into C
+        LD      B,$00           ; store 0 in B
+        JR      NC,LCD_WRCH_2   ; but if adding a 32 gave a carry, 
+        INC     B               ; then store 1 in B
+                                ; BC now contains the LCD window X start
+LCD_WRCH_2:        
+        LD      HL,$07          ; HL = BC+7, to get a pixel window that is
+        ADD     HL,BC           ; 8 pixels wide
+        LD      D,H
+        LD      E,L             ; store the window end X in DE
+        LD      A,$2A
+        CALL    LCD_WINDOW      ; set the pixel window X extents
+
+        POP     HL              ; restore the saved row,col values
+        POP     DE              ; restore DE
+        POP     BC              ; and BC
+        INC     SP
+        INC     SP
+        EX      (SP),HL         ; put the saved row,col values back on stack
+                                ; and restore the original value of HL
+        DEC     SP
+        DEC     SP
+
+        LD      A,$2C
+        OUT     (GFXLCD_CMD_PORT),A
+        EX      AF,AF'          ; restore flag
+        RET
+
+; Write an 8-pixel row of a character from (HL) to (DE)
+; Entry:
+;       B = OVER mask
+;       C = INVERSE mask
+LCD_WRCH8:
+        EX      AF,AF'          ; save printer/screen flag
+        LD      A,(DE)          ; fetch existing destination byte
+        AND     B               ; consider OVER
+        XOR     (HL)            ; now XOR with source
+        XOR     C               ; now with INVERSE MASK
+        LD      (DE),A          ; update screen/printer
+
+        PUSH    BC              ; save BC
+        PUSH    DE              ; save DE
+        PUSH    HL              ; save HL
+        PUSH    AF              ; save the bit pattern
+
+        LD      HL,LCD_COLOUR_TABLE     ; get the address of the colour table
+        BIT     6,(IY+$55)              ; if the br bit of ATTR_T is set, then
+        JR      Z,LCD_WRCH8_1           ; use the address of the bright
+        LD      HL,LCD_COLOUR_TABLE_BR  ; colours table instead.
+
+LCD_WRCH8_1:
+        PUSH    HL                      ; save the colour table pointer
+        LD      A,(IY+$55)              ; get ATTR_T in A
+        AND     $07                     ; mask A to get the ink colour
+        RLCA                            ; multiply by 2, since colours are 16 bits
+        ADD     A,L                     ; add the ink colour number
+        LD      L,A                     ; to the colour table pointer
+        LD      E,(HL)                  ; get the ink colour LSB in E
+        INC     HL
+        LD      D,(HL)                  ; get the ink colour MSB in D
+        POP     HL                      ; restore the colour table pointer
+        LD      A,(IY+$55)              ; get ATTR_T in A
+        RRC     A
+        RRC     A
+        RRC     A
+        AND     $07                     ; rotate and mask A to get the paper colour
+        RLCA                            ; multiply by 2, since colours are 16 bits
+        ADD     A,L                     ; add the paper colour number
+        LD      L,A                     ; to the colour table pointer
+        LD      A,(HL)                  ; get the paper colour LSB in A
+        INC     HL
+        LD      H,(HL)                  ; get the paper colour MSB in H
+        LD      L,A                     ; get the paper colour LSB in L
+
+        POP     AF                      ; restore the bit pattern
+        LD      C,GFXLCD_DATA_PORT      ; Put the data port address in C
+        LD      B,$08                   ; count 8 pixels
+LCD_WRCH8_2:     
+        RLA
+        JR      C,LCD_WRCH8_3           ; if the pixel is set, then jump ahead
+        OUT     (C),H
+        OUT     (C),L                   ; set the pixel to the paper colour
+        JR      LCD_WRCH8_4
+LCD_WRCH8_3:
+        OUT     (C),D
+        OUT     (C),E                   ; set the pixel to the ink colour
+LCD_WRCH8_4:          
+        DJNZ    LCD_WRCH8_2
+
+        POP     HL              ; restore HL
+        POP     DE              ; restore DE
+        POP     BC              ; restore BC
+        EX      AF,AF'          ; restore flag
+        RET                     ; and return
+
+; Clear lines from bottom
+; Entry:
+;       B = number of lines to clear (1-24)
+; Exit:
+;       calls CL-ADDR just before returning
+LCD_CL_LINES:
+        PUSH    AF              ; save AF
+        PUSH    DE              ; save DE
+        PUSH    HL              ; save HL
+        PUSH    BC              ; save BC
+
+        LD      A,$18           ; subtract the line count from 24
+        SUB     B               ; to get the starting line number from the top
+        LD      H,A             ; save the line number in H
+        LD      BC,$0020        ; window X starts at 32
+        LD      DE,$011F        ; window X ends at 287
+        LD      A,$2A
+        CALL    LCD_WINDOW      ; set the window X extents
+        LD      A,H             ; get the lines count into A
+        RLCA
+        RLCA
+        RLCA                    ; multiply by 8 (8 pixels per line)
+        ADD     A,$18           ; add 24 because the window Y starts at 24
+        LD      C,A             ; BC now has the window Y start (B already has 0)
+        LD      DE,$D7          ; window Y ends at 215
+        LD      A,$2B
+        CALL    LCD_WINDOW      ; set the window Y extents
+
+        LD      HL,LCD_COLOUR_TABLE     ; load the colour table pointer into HL
+        LD      A,($5C48)               ; get the paper colour from BORDCR
+        BIT     0,(IY+$02)              ; test TV_FLAG  - lower screen in use ?
+        JR      NZ,LCD_CL_LINES_1       ; skip to LCD_CL_LINES_1 if so.
+        LD      A,($5C8D)               ; fetch ATTR_P - permanent attributes
+        BIT     6,A                     ; check if bright is set
+        JR      Z,LCD_CL_LINES_1        
+        LD      HL,LCD_COLOUR_TABLE_BR  ; if so, load the bright colours
+
+LCD_CL_LINES_1:
+        RRC     A
+        RRC     A
+        RRC     A
+        AND     $07             ; rotate and mask A to get the paper colour
+        RLCA                    ; multiply by 2, since colours are 16 bits
+                                ; this also clears the carry flag so the fill
+                                ; routine doesn't send the write RAM command
+        ADD     A,L             ; add the paper colour number
+                                ; carry won't be set by this
+        LD      L,A             ; to the colour table pointer
+        LD      A,(HL)          ; get the paper colour LSB in A
+        INC     HL
+        LD      H,(HL)          ; get the paper colour MSB in H
+        LD      L,A             ; get the paper colour LSB in L
+        
+
+        POP     BC              ; restore the line count
+        PUSH    BC              ; and save it again
+        LD      A,$2C
+        OUT     (GFXLCD_CMD_PORT),A     ; send the write RAM command
+LCD_CL_LINES_2:
+        LD      DE,$0800        ; each line has 2048 pixels
+        CALL    LCD_FILL        ; fill the line with the colour in HL
+        DJNZ    LCD_CL_LINES_2  ; repeat for all the lines
+
+        POP     BC              ; restore BC
+        POP     HL              ; restore HL
+        POP     DE              ; restore DE
+        POP     AF              ; restore AF
+        CALL    L0E9B           ; routine CL-ADDR gets top address
+        RET                     ; and return
+
+; CLK = 3.33MHz = .3uS
+; 50ms = 50000/.3 = 166667 T states
+; inner loop = 7 + (4+12+12)*255 + 7 + 4 + 12 = 7170 T states
+; for 50ms:  A = outer loop count = 166667/7170 = 23 = $17
+; for 150ms: A = outer loop count = 23*3 = 69 = $45
+; for 500ms: A = outer loop count = 23*10 = 230 = $e6
+LCD_DELAY:
+        PUSH    BC
+LCD_DELAY_1:
+        LD      C,0             ; 7
+LCD_DELAY_2:
+        DEC     C               ; 4
+        JR      LCD_DELAY_3     ; 12
+LCD_DELAY_3:                
+        JR      NZ,LCD_DELAY_2  ; 12/7
+        DEC     A               ; 4
+        JR      NZ,LCD_DELAY_1  ; 12/7
+        POP     BC
+        RET
+
 ;; spare
-L386E:  DEFB    $FF, $FF        ;
 
+        DEFB    $FF, $FF, $FF;, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
 
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+; the colour table must be situated such that the lowest nibble of the address
+; is 0.
+ORG $3CE0
+LCD_COLOUR_TABLE:
+        ; Normal colours
+        DEFW    $0000   ; Black
+        DEFW    $0017   ; Blue
+        DEFW    $B800   ; Red
+        DEFW    $B817   ; Magenta
+        DEFW    $05E0   ; Green
+        DEFW    $05F7   ; Cyan
+        DEFW    $BDE0   ; Yellow
+        DEFW    $BDF7   ; White
+LCD_COLOUR_TABLE_BR:        
+        ; Bright colours
+        DEFW    $0000   ; Black
+        DEFW    $001F   ; Blue
+        DEFW    $F800   ; Red
+        DEFW    $F81F   ; Magenta
+        DEFW    $07E0   ; Green
+        DEFW    $07FF   ; Cyan
+        DEFW    $FFE0   ; Yellow
+        DEFW    $FFFF   ; White
 
 ORG $3D00
 
@@ -20309,6 +20755,9 @@ L3D00:  DEFB    %00000000
         DEFB    %01000010
         DEFB    %00111100
 
+#if $ > (16384)
+!ERROR: ROM Exceeded!
+#endif
 
 .end
 ;#end                            ; generic cross-assembler directive 

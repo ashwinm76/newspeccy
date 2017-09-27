@@ -643,7 +643,6 @@ void init_io(void)
 	static struct sigaction newact;
 
     il9341_init();
-    il9341_set_window(LCD_WIN_X_START, LCD_WIN_X_END, LCD_WIN_Y_START, LCD_WIN_Y_END);
 
     // Set up the 50ms timer
 	newact.sa_handler = int_timer;
@@ -829,8 +828,8 @@ static BYTE port_fe_in(void)
 					case 'q': case 'w': case 'e': case 'r': case 't': ports[keycount] = 0xfb; break;
 					case 'y': case 'u': case 'i': case 'o': case 'p': ports[keycount] = 0xdf; break;
 					case 'a': case 's': case 'd': case 'f': case 'g': ports[keycount] = 0xfd; break;
-					case 'h': case 'j': case 'k': case 'l':            ports[keycount] = 0xbf; break;
-					          case 'z': case 'x': case 'c': case 'v': ports[keycount] = 0xfe; break;
+					case 'h': case 'j': case 'k': case 'l':           ports[keycount] = 0xbf; break;
+					case 'z': case 'x': case 'c': case 'v':           ports[keycount] = 0xfe; break;
 					case 'b': case 'n': case 'm':                     ports[keycount] = 0x7f; break;
 					default: break;
 				}
@@ -908,6 +907,12 @@ static BYTE port_fe_in(void)
 	}
 	else if (keycount && (io_port_h == ports[keycount-1]))
 	{
+		if (symbol_shift && keycount == 2 && ports[1] == 0x7f)
+		{
+			symbol_shift = 0;
+			keycount = 0;
+			return keys[1] & keys[0];
+		}
 		symbol_shift = 0;
 		return keys[--keycount];
 	}

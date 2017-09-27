@@ -1,0 +1,7 @@
+*.o
+*.lst
+*.hex
+*.bin
+*.exe
+*.log
+
