@@ -19119,116 +19119,75 @@ GFXLCD_ROTATION = 1
 GFXLCD_CMD_PORT = 1
 GFXLCD_DATA_PORT = 5
 
-; LCD controller initialization for the IL9341 LCD controller
-LCD_INIT: 
-        ; 0x01 Soft reset
-        LD      A,$1
-        OUT     (GFXLCD_CMD_PORT),A
-        
-        ; delay(50);
-        LD      A,$17
-        CALL    LCD_DELAY
+; Initialise the LCD controller
+LCD_INIT:
+        PUSH    BC			; save BC
+	PUSH	HL			; save HL
+	LD	HL,LCD_INIT_TABLE	; get the init table pointer into HL
+	LD	C,GFXLCD_DATA_PORT      ; load the data port address into C
+	LD	B,(HL)		        ; get the table length into B
+	INC	HL			; next table location
 
 LCD_INIT_1:
-        ; 0x28 Display off
-        LD      A,$28
-        OUT     (GFXLCD_CMD_PORT),A
+	LD	A,(HL)			; get the command into A
+	INC	HL			; next table location
+	OR	A			; is the command 0 (delay code)?
+	JR	NZ,LCD_INIT_2		; if not, jump forward
+	LD	A,(HL)			; else load the delay value into A
+	INC	HL			; next table location
+	CALL	LCD_DELAY		; call the delay routine
+	JR	LCD_INIT_3		; jump forward
 
-        ; 0xc0 Power Control 1
-        ; VRH = 0x23 (GVDD = 4.6V)
-        LD      A,$C0
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,$23
-        OUT     (GFXLCD_DATA_PORT),A
+LCD_INIT_2:
+	OUT     (GFXLCD_CMD_PORT),A	; send the command out
+	LD	A,(HL)			; get the data count into A
+	INC	HL			; next table location
+	OR	A			; is the data count 0? if so,
+	JR	Z,LCD_INIT_1		; go back to the start of the loop
 
-        ; 0xc1 Power Control 2
-        ; BT = 0 (AVDD = VCI*2, VGH = VCI*7, VGL = -VCI*4)
-        LD      A,$C1
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,$10
-        OUT     (GFXLCD_DATA_PORT),A
+	PUSH	BC			; save BC
+	LD	B,A			; load the data count into B
+	OTIR				; output the table data till B=0
+	POP	BC			; restore BC
 
-        ; 0xc5 VCOM Control 1
-        ; VMH = 0x2b (VCOMH = 3.775V)
-        ; VML = 0x2b (VCOML = -1.425V)
-        LD      A,$C5
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,$2B
-        OUT     (GFXLCD_DATA_PORT),A
-        OUT     (GFXLCD_DATA_PORT),A
+LCD_INIT_3:
+	DJNZ	LCD_INIT_1		; repeat till B is 0
+	POP	HL			; restore HL
+	POP	BC			; restore BC
+	RET				; return
 
-        ; 0xc7 VCOM Control 2
-        ; nVM = 1
-        ; VMF = 0x40 (VCOMH = VMH, VCOML = VML)
-        LD      A,$C7
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,$C0
-        OUT     (GFXLCD_DATA_PORT),A
+; Get the colour table pointer
+; Either the normal or bright table pointer is
+; returned, depending on the br bit in ATTR_T
+; and whether the lower screen is in use.
+; Exit:
+;       HL = pointer to the colour table
+LCD_GET_COLTAB:
+        LD      HL,LCD_COLOUR_TABLE     ; load the colour table pointer into HL
+        BIT     0,(IY+$02)              ; test TV_FLAG  - lower screen in use ?
+        RET     NZ                      ; return if so.
+        BIT     6,(IY+$55)              ; check if bright is set in ATTR_T
+        RET     Z                       ; return if not
+        LD      HL,LCD_COLOUR_TABLE_BR  ; else load the bright colours
+        RET                             ; and return
 
-        ; 0x36 Memory Access Control
-        ; MY = 1
-        ; MX = 0
-        ; MV = 0
-        ; ML = 0
-        ; BGR = 1
-        ; MH = 0
-        LD      A,$36
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,$88
-        OUT     (GFXLCD_DATA_PORT),A
-
-        ; 0x3a COLMODE Pixel Format Set
-        ; DPI = 101b (16 bpp for RGB i/f)
-        ; DBI = 101b (16 bpp for MCU i/f)
-        LD      A,$3A
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,$55
-        OUT     (GFXLCD_DATA_PORT),A
-
-        ; 0xb1 Frame Rate Control
-        ; DIVA = 00 (Division ratio 1)
-        ; RTNA = 0x1b (70Hx frame rate)
-        LD      A,$B1
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,$00
-        OUT     (GFXLCD_DATA_PORT),A
-        LD      A,$1B
-        OUT     (GFXLCD_DATA_PORT),A
-
-        ; 0xb7 Entry Mode Set
-        ; DSTB = 0 (No deep standby)
-        ; GON = 1 -|
-        ; DTE = 1 -|- Normal display
-        ; GAS = 1 (Low voltage detection disable)
-        LD      A,$B7
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,$07
-        OUT     (GFXLCD_DATA_PORT),A
-
-        ; 0x11 Sleep Out (disable sleep mode)
-        LD      A,$11
-        OUT     (GFXLCD_CMD_PORT),A
-
-        ;delay(150);
-        LD      A,$45
-        CALL    LCD_DELAY
-LCD_INIT_2:        
-
-        ; 0x29 Display On
-        LD      A,$29
-        OUT     (GFXLCD_CMD_PORT),A
-
-        ;delay(500);
-        LD      A,$E6
-        CALL    LCD_DELAY
-LCD_INIT_3:        
-
-        ; set rotation
-        LD      A,$36
-        OUT     (GFXLCD_CMD_PORT),A
-        LD      A,MADCTL
-        OUT     (GFXLCD_DATA_PORT),A
-
+; Get a colour's RGB565 value
+; Entry:
+;       HL = address of the colour table to use
+;       A = colour number (in bits 2:0)
+; Exit:
+;       HL = colour RGB565 value
+LCD_GET_COL:
+        PUSH    AF                      ; save the colour number
+        AND     $07                     ; mask unnecessary bits
+        RLCA                            ; colour table offset = 2 * colour number
+        ADD     A,L                     ; add the offset to HL
+        LD      L,A                     ; there will be no carry.
+        LD      A,(HL)                  ; load the lower byte of the colour in A
+        INC     HL
+        LD      H,(HL)                  ; load the upper byte of the colour in H
+        LD      L,A                     ; put the lower byte of the colour in L
+        POP     AF                      ; restore the colour number
         RET
 
 ; Set the border colour
@@ -19238,20 +19197,13 @@ LCD_INIT_3:
 ;       A = ink and paper colours usable for the lower part of the screen.
 ;           This can be stored in BORDCR.
 LCD_BORDER:
-        PUSH    AF                      ; Save AF
+        PUSH    AF                      ; save AF
         PUSH    BC                      ; and BC
         PUSH    DE                      ; and DE
         PUSH    HL                      ; and HL
-        
-        LD      HL,LCD_COLOUR_TABLE     ; Load HL with the colour look-up table
-        RLCA                            ; Colour table offset = 2 * colour number
-        LD      D,$00                   ; Load DE with the colour table
-        LD      E,A                     ; offset from A
-        ADD     HL,DE                   ; Get the colour table entry address in HL
-        LD      E,(HL)                  ; Load the lower byte of the colour in E
-        INC     HL
-        LD      D,(HL)                  ; Load the upper byte of the colour in D
-        EX      DE,HL                   ; Put the colour value into HL
+
+        LD      HL,LCD_COLOUR_TABLE     ; load HL with the colour look-up table
+        CALL    LCD_GET_COL             ; get the RGB565 colour value in HL
         SCF                             ; set carry so that the fill routine
                                         ; sends the write RAM command before 
                                         ; doing the fill
@@ -19357,17 +19309,17 @@ LCD_WINDOW:
 ;       TOS-1 = (row, col)
 LCD_WRCH:
         EX      AF,AF'          ; save printer/screen flag
+        DI                      ; disable interrupts while we fiddle with SP
         INC     SP
         INC     SP
         EX      (SP),HL         ; exchange the row/col from TOS with HL
         DEC     SP
         DEC     SP
+        EI                      ; re-enable interrupts
         PUSH    BC              ; save BC
         PUSH    DE              ; and DE
         PUSH    HL              ; save the original row/col on the stack
 
-        ; 23-24 -> 22-23 == (24-DF_SZ)-23
-        ; 22-23 -> 22-23
         LD      A,$18           ; load A with 24
         SUB     H               ; A = 24-row to get the row in the range
                                 ; 0..23 into A
@@ -19418,12 +19370,14 @@ LCD_WRCH_2:
         POP     HL              ; restore the saved row,col values
         POP     DE              ; restore DE
         POP     BC              ; and BC
+        DI                      ; disable interrupts while we fiddle with SP
         INC     SP
         INC     SP
         EX      (SP),HL         ; put the saved row,col values back on stack
                                 ; and restore the original value of HL
         DEC     SP
         DEC     SP
+        EI                      ; re-enable interrupts
 
         LD      A,$2C
         OUT     (GFXLCD_CMD_PORT),A
@@ -19447,34 +19401,22 @@ LCD_WRCH8:
         PUSH    HL              ; save HL
         PUSH    AF              ; save the bit pattern
 
-        LD      HL,LCD_COLOUR_TABLE     ; get the address of the colour table
-        BIT     6,(IY+$55)              ; if the br bit of ATTR_T is set, then
-        JR      Z,LCD_WRCH8_1           ; use the address of the bright
-        LD      HL,LCD_COLOUR_TABLE_BR  ; colours table instead.
+        CALL    LCD_GET_COLTAB  ; get the address of the colour table in HL
+        ;LD      HL,LCD_COLOUR_TABLE     ; get the address of the colour table
+        ;BIT     6,(IY+$55)              ; if the br bit of ATTR_T is set, then
+        ;JR      Z,LCD_WRCH8_1           ; use the address of the bright
+        ;LD      HL,LCD_COLOUR_TABLE_BR  ; colours table instead.
 
 LCD_WRCH8_1:
         PUSH    HL                      ; save the colour table pointer
         LD      A,(IY+$55)              ; get ATTR_T in A
-        AND     $07                     ; mask A to get the ink colour
-        RLCA                            ; multiply by 2, since colours are 16 bits
-        ADD     A,L                     ; add the ink colour number
-        LD      L,A                     ; to the colour table pointer
-        LD      E,(HL)                  ; get the ink colour LSB in E
-        INC     HL
-        LD      D,(HL)                  ; get the ink colour MSB in D
+        CALL    LCD_GET_COL             ; get the RGB565 value in HL
+        EX      DE,HL                   ; put the colour value in DE
         POP     HL                      ; restore the colour table pointer
-        LD      A,(IY+$55)              ; get ATTR_T in A
         RRC     A
         RRC     A
-        RRC     A
-        AND     $07                     ; rotate and mask A to get the paper colour
-        RLCA                            ; multiply by 2, since colours are 16 bits
-        ADD     A,L                     ; add the paper colour number
-        LD      L,A                     ; to the colour table pointer
-        LD      A,(HL)                  ; get the paper colour LSB in A
-        INC     HL
-        LD      H,(HL)                  ; get the paper colour MSB in H
-        LD      L,A                     ; get the paper colour LSB in L
+        RRC     A                       ; rotate A to get the paper colour
+        CALL    LCD_GET_COL             ; get the RGB565 value in HL
 
         POP     AF                      ; restore the bit pattern
         LD      C,GFXLCD_DATA_PORT      ; Put the data port address in C
@@ -19515,7 +19457,7 @@ LCD_CL_LINES:
         LD      DE,$011F        ; window X ends at 287
         LD      A,$2A
         CALL    LCD_WINDOW      ; set the window X extents
-        LD      A,H             ; get the lines count into A
+        LD      A,H             ; get the line number into A
         RLCA
         RLCA
         RLCA                    ; multiply by 8 (8 pixels per line)
@@ -19525,36 +19467,27 @@ LCD_CL_LINES:
         LD      A,$2B
         CALL    LCD_WINDOW      ; set the window Y extents
 
-        LD      HL,LCD_COLOUR_TABLE     ; load the colour table pointer into HL
+        CALL    LCD_GET_COLTAB  ; get the address of the colour table in HL
+        ;LD      HL,LCD_COLOUR_TABLE     ; load the colour table pointer into HL
         LD      A,($5C48)               ; get the paper colour from BORDCR
         BIT     0,(IY+$02)              ; test TV_FLAG  - lower screen in use ?
         JR      NZ,LCD_CL_LINES_1       ; skip to LCD_CL_LINES_1 if so.
         LD      A,($5C8D)               ; fetch ATTR_P - permanent attributes
-        BIT     6,A                     ; check if bright is set
-        JR      Z,LCD_CL_LINES_1        
-        LD      HL,LCD_COLOUR_TABLE_BR  ; if so, load the bright colours
+        ;BIT     6,A                     ; check if bright is set
+        ;JR      Z,LCD_CL_LINES_1        
+        ;LD      HL,LCD_COLOUR_TABLE_BR  ; if so, load the bright colours
 
 LCD_CL_LINES_1:
         RRC     A
         RRC     A
-        RRC     A
-        AND     $07             ; rotate and mask A to get the paper colour
-        RLCA                    ; multiply by 2, since colours are 16 bits
-                                ; this also clears the carry flag so the fill
-                                ; routine doesn't send the write RAM command
-        ADD     A,L             ; add the paper colour number
-                                ; carry won't be set by this
-        LD      L,A             ; to the colour table pointer
-        LD      A,(HL)          ; get the paper colour LSB in A
-        INC     HL
-        LD      H,(HL)          ; get the paper colour MSB in H
-        LD      L,A             ; get the paper colour LSB in L
-        
-
+        RRC     A               ; rotate A to get the paper colour
+        CALL    LCD_GET_COL     ; get the RGB565 value in HL
         POP     BC              ; restore the line count
         PUSH    BC              ; and save it again
         LD      A,$2C
         OUT     (GFXLCD_CMD_PORT),A     ; send the write RAM command
+        OR      A               ; clear the carry flag so the fill routine
+                                ; doesn't send the write RAM command
 LCD_CL_LINES_2:
         LD      DE,$0800        ; each line has 2048 pixels
         CALL    LCD_FILL        ; fill the line with the colour in HL
@@ -19589,7 +19522,7 @@ LCD_DELAY_3:
 
 ;; spare
 
-        DEFB    $FF, $FF, $FF;, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF;
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
@@ -19666,6 +19599,50 @@ LCD_DELAY_3:
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+
+; LCD controller initialization table
+; Format:
+;       1st byte: table length (number of entries)
+;       subsequent bytes: entries
+; Entry format:
+;       [command] [data count] [data bytes]
+;       command = 0 => delay
+LCD_INIT_TABLE:
+        DEFB $10                ; table length
+        DEFB $01,$00            ; soft reset
+        DEFB $00,$17            ; delay 50ms
+        DEFB $28,$00            ; display off
+        DEFB $c0,$01,$23        ; power control 1
+                                ; VRH = 0x23 (GVDD = 4.6V)
+        DEFB $c1,$01,$10        ; power control 2
+                                ; BT = 0 (AVDD=VCI*2, VGH=VCI*7, VGL=-VCI*4)
+        DEFB $c5,$02,$2b,$2b    ; VCOM control 1
+                                ; VMH = 0x2b (VCOMH = 3.775V)
+                                ; VML = 0x2b (VCOML = -1.425V)
+        DEFB $c7,$01,$c0        ; VCOM control 2
+                                ; nVM = 1
+                                ; VMF = 0x40 (VCOMH = VMH, VCOML = VML)
+        DEFB $36,$01,$88        ; memory access control
+                                ; MY=1, MX=0, MV=0, ML=0, BGR=1, MH=0
+        DEFB $3a,$01,$55        ; COLMODE pixel format set
+                                ; DPI = 101b (16 bpp for RGB i/f)
+                                ; DBI = 101b (16 bpp for MCU i/f)
+        DEFB $b1,$02,$00,$1b    ; frame rate control
+                                ; DIVA = 00 (Division ratio 1)
+                                ; RTNA = 0x1b (70Hx frame rate)
+        DEFB $b7,$01,$07        ; entry mode set
+                                ; DSTB=0 (No deep standby)
+                                ; GON=1, DTE=1 (Normal display)
+                                ; GAS=1 (Low voltage detection disable)
+        DEFB $11,$00            ; sleep out (disable sleep mode)
+        DEFB $00,$45            ; delay 150ms
+        DEFB $29,$00            ; display On
+        DEFB $00,$e6            ; delay 500ms
+        DEFB $36,$01,MADCTL     ; set rotation
 
 ; the colour table must be situated such that the lowest nibble of the address
 ; is 0.

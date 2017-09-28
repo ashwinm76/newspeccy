@@ -927,7 +927,9 @@ static BYTE port_fe_in(void)
  */
 static void port_fe_out(BYTE data)
 {
-	fb_set_border(data & 0x7);
+	// silence the warning
+	data = data;
+	//fb_set_border(data & 0x7);
 }
 /*
  *	I/O handler for read display RAM
