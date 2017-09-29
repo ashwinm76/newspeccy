@@ -10792,7 +10792,7 @@ L22FD:  BIT     2,C             ; is it inverse 1 ?
 
 ;; PLOT-END
 L2303:  LD      (HL),A          ; load byte to the screen.
-        JP      L0BDB           ; exit to PO-ATTR to set colours for cell.
+        JP      LCD_PLOT8       ; plot the pixels
 
 ; ------------------------------
 ; Put two numbers in BC register
@@ -19307,6 +19307,8 @@ LCD_WINDOW:
 ; Prepare to write char pixels from (HL) to (DE)
 ; Entry:
 ;       TOS-1 = (row, col)
+; Exit:
+;       The lcd window is set, ready for pixel writes.
 LCD_WRCH:
         EX      AF,AF'          ; save printer/screen flag
         DI                      ; disable interrupts while we fiddle with SP
@@ -19325,7 +19327,7 @@ LCD_WRCH:
                                 ; 0..23 into A
         BIT     0,(IY+$02)      ; test TV_FLAG  - lower screen in use ?
         JR      Z,LCD_WRCH_1    ; skip to LCD_WRCH_1 if handling upper part
-        LD      A,H
+        LD      A,H             ; otherwise just use the row number
         
 LCD_WRCH_1:
         AND     $1F             ; clear the top 3 bits of A, and also the carry
@@ -19355,11 +19357,9 @@ LCD_WRCH_1:
         RLA                     ; to get the x position (0..255) in A
         ADD     A,$20           ; add 32 to get it within the display window (32..287)
         LD      C,A             ; get the LSB of the sum into C
-        LD      B,$00           ; store 0 in B
-        JR      NC,LCD_WRCH_2   ; but if adding a 32 gave a carry, 
-        INC     B               ; then store 1 in B
-                                ; BC now contains the LCD window X start
-LCD_WRCH_2:        
+        LD	A,$00		; A = 0
+        RLA			; A = carry from adding 32 previously
+        LD	B,A             ; BC now contains the LCD window X start
         LD      HL,$07          ; HL = BC+7, to get a pixel window that is
         ADD     HL,BC           ; 8 pixels wide
         LD      D,H
@@ -19388,6 +19388,7 @@ LCD_WRCH_2:
 ; Entry:
 ;       B = OVER mask
 ;       C = INVERSE mask
+;       The lcd window must have been set previously.
 LCD_WRCH8:
         EX      AF,AF'          ; save printer/screen flag
         LD      A,(DE)          ; fetch existing destination byte
@@ -19396,27 +19397,23 @@ LCD_WRCH8:
         XOR     C               ; now with INVERSE MASK
         LD      (DE),A          ; update screen/printer
 
+LCD_WRCH8_1:    
         PUSH    BC              ; save BC
         PUSH    DE              ; save DE
         PUSH    HL              ; save HL
+
         PUSH    AF              ; save the bit pattern
 
         CALL    LCD_GET_COLTAB  ; get the address of the colour table in HL
-        ;LD      HL,LCD_COLOUR_TABLE     ; get the address of the colour table
-        ;BIT     6,(IY+$55)              ; if the br bit of ATTR_T is set, then
-        ;JR      Z,LCD_WRCH8_1           ; use the address of the bright
-        ;LD      HL,LCD_COLOUR_TABLE_BR  ; colours table instead.
-
-LCD_WRCH8_1:
         PUSH    HL                      ; save the colour table pointer
         LD      A,(IY+$55)              ; get ATTR_T in A
-        CALL    LCD_GET_COL             ; get the RGB565 value in HL
-        EX      DE,HL                   ; put the colour value in DE
+        CALL    LCD_GET_COL             ; get the ink RGB565 value in HL
+        EX      DE,HL                   ; put the ink colour value in DE
         POP     HL                      ; restore the colour table pointer
         RRC     A
         RRC     A
         RRC     A                       ; rotate A to get the paper colour
-        CALL    LCD_GET_COL             ; get the RGB565 value in HL
+        CALL    LCD_GET_COL             ; get the paper RGB565 value in HL
 
         POP     AF                      ; restore the bit pattern
         LD      C,GFXLCD_DATA_PORT      ; Put the data port address in C
@@ -19430,7 +19427,7 @@ LCD_WRCH8_2:
 LCD_WRCH8_3:
         OUT     (C),D
         OUT     (C),E                   ; set the pixel to the ink colour
-LCD_WRCH8_4:          
+LCD_WRCH8_4:
         DJNZ    LCD_WRCH8_2
 
         POP     HL              ; restore HL
@@ -19500,6 +19497,58 @@ LCD_CL_LINES_2:
         CALL    L0E9B           ; routine CL-ADDR gets top address
         RET                     ; and return
 
+; Plot an 8-pixel pattern
+; Entry:
+;       A = the pixel pattern to plot
+;       The COORDS system variable contains the coordinates of the pixel.
+; Exit:
+;       calls PO-ATTR to update the cell attributes
+LCD_PLOT8:
+        PUSH    BC              ; save BC
+        PUSH    DE              ; save DE
+        PUSH    HL              ; save HL
+
+        PUSH    AF              ; save the pixel pattern
+        LD      A,(IY+$43)      ; get the x coordinate in A
+        AND     $F8             ; move it to the left nearest 8-pixel boundary
+        ADD     A,$20           ; add 32 to get it within the display window (32..287)
+        LD      C,A             ; store the LS byte of the sum in C
+        LD	A,$00		; A = 0
+        RLA			; A = carry from adding 32 previously
+        LD	B,A             ; BC now contains the LCD window X start
+        LD      H,$00           ; H = 0
+        LD      L,$07           ; L = 7
+        ADD     HL,BC           ; HL = BC + 7 to get a window 8 pixels wide
+        EX      DE,HL           ; put the window X end in DE
+        LD      A,$2A
+        CALL    LCD_WINDOW      ; set the window X extents
+
+        LD      A,(IY+$44)      ; get the y coordinate in A
+        ADD     A,$18           ; add 24 to get it within the display window (24..215)
+        LD      C,A             ; store the LS byte of the sum in C
+        LD      B,$00           ; BC now contains the LCD window Y start
+        LD      D,B             ; 
+        LD      E,C             ; DE=BC, window Y end = window Y start
+        LD      A,$2B
+        CALL    LCD_WINDOW      ; set the window Y extents
+
+        LD      A,$2C
+        OUT     (GFXLCD_CMD_PORT),A     ; send the write RAM command
+
+        POP     AF              ; restore the pixel pattern
+        CALL    LCD_WRCH8_1
+        EX      AF,AF'
+        POP     HL              ; restore HL
+        POP     DE              ; restore DE
+        POP     BC              ; restore BC
+        JP      L0BDB           ; exit to PO-ATTR to set colours for cell.
+
+; Refresh the entire LCD display by transferring the display file ($4000)
+; to the LCD controller RAM.
+LCD_RFSH:
+
+        RET
+
 ; CLK = 3.33MHz = .3uS
 ; 50ms = 50000/.3 = 166667 T states
 ; inner loop = 7 + (4+12+12)*255 + 7 + 4 + 12 = 7170 T states
@@ -19522,14 +19571,8 @@ LCD_DELAY_3:
 
 ;; spare
 
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
-        DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
+        ;DEFB    $FF, $FF, $FF;, $FF, $FF, $FF;
+        DEFB    $FF, $FF, $FF, $FF, $FF;, $FF, $FF, $FF;
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;
         DEFB    $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF;

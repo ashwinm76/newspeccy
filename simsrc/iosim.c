@@ -846,6 +846,15 @@ static BYTE port_fe_in(void)
 					}
 				}
 			}
+			// tab (used as BREAK)
+			else if (c == '\t')
+			{
+				keys[1] = 0xfe;
+				ports[1] = 0x7f;
+				keys[0] = 0xfe;
+				ports[0] = 0xfe;
+				keycount = 2;
+			}
 			// enter
 			else if (c == '\r')
 			{
