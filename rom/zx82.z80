@@ -5597,6 +5597,9 @@ L121C:
                                 ; require clearing.
 
         JR      L12A9           ; forward to MAIN-1
+        ;HALT
+        ;NOP
+        ;NOP
 
 ; -------------------------
 ; THE 'MAIN EXECUTION LOOP'

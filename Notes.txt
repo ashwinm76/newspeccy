@@ -1,0 +1,156 @@
+Code only:
+==========
+TOTAL: 110
+
+Raw data: 
+==========
+$1
+del $17
+$28
+$c0 $23
+$c1
+$10
+$c5 $2b $2b
+$c7 $c0
+$36 $88
+$3a $55
+$b1 $00 $1b
+$b7 $07
+$11
+del $45
+$29
+del $e6
+$36 MADCTL
+------------
+TOTAL: 30
+
+Encoded data:
+==============
+[table len]$10
+$01 $00
+[del]$00 $17
+$28 $00
+$c0 $01 $23
+$c1 $01 $10
+$c5 $02 $2b $2b
+$c7 $01 $c0
+$36 $01 $88
+$3a $01 $55
+$b1 $02 $00 $1b
+$b7 $01 $07
+$11 $00
+[del]$00 $45
+$29 $00
+[del]$00 $e6
+$36 $01 MADCTL
+---------------
+DATA TOTAL: 44
+
+LCD_INIT:
+		PUSH	BC						; 1 save BC
+		PUSH	HL						; 1 save HL
+		LD		HL,LCD_INIT_TABLE		; 3 get the init table pointer into HL
+		LD		C,GFXLCD_DATA_PORT      ; 2 load the data port address into C
+		LD		B,(HL)					; 1 get the table length into B
+		INC		HL						; 1 next table location
+
+LCD_INIT_1:
+		LD		A,(HL)					; 1 get the command into A
+		INC		HL						; 1 next table location
+		OR		A						; 1 is the command 0 (delay code)?
+		JR		NZ,LCD_INIT_2			; 2 if not, jump forward
+		LD		A,(HL)					; 1 else load the delay value into A
+		INC		HL						; 1 next table location
+		CALL	LCD_DELAY				; 3 call the delay routine
+		JR		LCD_INIT_3				; 2 jump forward
+
+LCD_INIT_2:
+		OUT     (GFXLCD_CMD_PORT),A		; 2 send the command out
+		LD		A,(HL)					; 1 get the data count into A
+		INC		HL						; 1 next table location
+		OR		A						; 1 is the data count 0? if so,
+		JR		Z,LCD_INIT_1			; 2 go back to the start of the loop
+
+		PUSH	BC						; 1 save BC
+		LD		B,A						; 1 load the data count into B
+		OTIR							; 2 output the table data till B=0
+		POP		BC						; 1 restore BC
+
+LCD_INIT_3:
+		DJNZ	LCD_INIT_1				; 2 repeat till B is 0
+		POP		HL						; 1 restore HL
+		POP		BC						; 1 restore BC
+		RET								; 1 return
+-------------------------------------------
+CODE TOTAL: 38
+GRAND TOTAL (CODE+DATA) = 44+38 = 82
+
+V2 Encoded data:
+=================
+[table len]$11
+GFXLCD_CMD_PORT $01
+[del]$00 $17
+GFXLCD_CMD_PORT $28 
+GFXLCD_CMD_PORT $c0 GFXLCD_DATA_PORT $23
+GFXLCD_CMD_PORT $c1 
+GFXLCD_CMD_PORT $10 
+GFXLCD_CMD_PORT $c5 GFXLCD_DATA_PORT $2b GFXLCD_DATA_PORT $2b
+GFXLCD_CMD_PORT $c7 GFXLCD_DATA_PORT $c0
+GFXLCD_CMD_PORT $36 GFXLCD_DATA_PORT $88
+GFXLCD_CMD_PORT $3a GFXLCD_DATA_PORT $55
+GFXLCD_CMD_PORT $b1 GFXLCD_DATA_PORT $00 GFXLCD_DATA_PORT $1b
+GFXLCD_CMD_PORT $b7 GFXLCD_DATA_PORT $07
+GFXLCD_CMD_PORT $11 
+[del]$00 $45
+GFXLCD_CMD_PORT $29 GFXLCD_DATA_PORT $00
+[del]$00 $e6
+GFXLCD_CMD_PORT $36 GFXLCD_DATA_PORT MADCTL
+---------------
+DATA TOTAL: 57
+
+LCD_INIT:
+		PUSH	BC						; 1
+		PUSH	HL						; 1
+		LD		HL,LCD_INIT_TABLE		; 3
+		LD		B,(HL)					; 1
+		INC		HL						; 1
+LCD_INIT_1:		
+		LD		A,(HL)					; 1
+		INC		HL						; 1
+		OR		A						; 1
+		JR		NZ,LCD_INIT_2			; 2
+		LD		A,(HL)					; 1
+		INC		HL						; 1
+		CALL	LCD_DELAY				; 3
+		DJNZ	LCD_INIT_1				; 2
+		JR		LCD_INIT_3				; 2
+LCD_INIT_2:		
+		LD		C,A						; 1
+		OUTI							; 2
+		JR		NZ,LCD_INIT_1			; 2
+
+LCD_INIT_3:		
+		POP		HL						; 1
+		POP		BC						; 1
+		RET								; 1
+-------------------------------------------
+CODE TOTAL: 29
+GRAND TOTAL (CODE+DATA) = 57+27 = 86
+
+
+	ADD     A,$20           ; add 32 to get it within the display window (32..287)
+    LD      C,A             ; get the LSB of the sum into C
+    LD      B,$00           ; 2 7 store 0 in B
+    JR      NC,LCD_WRCH_2   ; 2 7/12 but if adding a 32 gave a carry, 
+    INC     B               ; 1 4 then store 1 in B
+                            ; BC now contains the LCD window X start
+;--------------------------------------------
+							; 5 18(carry)/19(no carry)
+
+	ADD     A,$20           ; add 32 to get it within the display window (32..287)
+    LD      C,A             ; get the LSB of the sum into C
+    LD		A,$00			; 2 7 A = 0
+    RLA						; 1 4 A = carry from adding 32 previously
+    LD		B,A             ; 1 4 BC now contains the LCD window X start
+;--------------------------------------------
+							; 4 15
